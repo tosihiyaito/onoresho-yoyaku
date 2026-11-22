@@ -78,6 +78,9 @@
     .rcard.done2{border-color:var(--ok);}
     .rcard.done2 b{color:var(--ok);}
     .hint{font-size:12px;color:var(--danger);margin-bottom:8px;}
+    /* カフェメニュー（対象の会場だけ表示） */
+    .menu-sel{margin-bottom:8px;}
+    .card .meal{font-size:12px;color:var(--accent);margin-top:4px;}
   </style>
 </head>
 <body>
@@ -105,6 +108,11 @@
         <input id="f-name" type="text" placeholder="例：山田 花子" autocomplete="name">
         <label>人数 <span class="req">※必須</span></label>
         <select id="f-people"></select>
+        <!-- お食事のメニュー（カフェ会場の教室だけ表示。人数分を選ぶ） -->
+        <div id="menu-box" style="display:none;">
+          <label>お食事のメニュー <span class="req">※必須・人数分</span></label>
+          <div id="menu-list"></div>
+        </div>
         <label>メールアドレス（任意・ご入力で確認メールが届きます）</label>
         <input id="f-email" type="email" placeholder="例：example@gmail.com" autocomplete="email">
         <label>ご連絡先（電話番号・任意）</label>
@@ -216,6 +224,7 @@
           +   '<div class="time">' + s.start + '〜' + s.end + '</div>'
           +   '<div class="venue">📍 ' + esc(s.venue) + '</div>'
           +   (s.note ? '<div class="note2">' + esc(s.note) + '</div>' : '')
+          +   ((s.menu && s.menu.length) ? '<div class="meal">🍽 お食事つき（ご予約時にメニューをお選びください）</div>' : '')
           + '</div>'
           + badge;
         el.appendChild(card);
@@ -236,6 +245,9 @@
       var sel = document.getElementById('f-people');
       sel.innerHTML = '';
       for(var n=1;n<=max;n++){ var o=document.createElement('option'); o.value=n; o.textContent=n+'名'; sel.appendChild(o); }
+      sel.onchange = renderMenus;                       // 人数を変えたらメニュー欄の数も合わせる
+      document.getElementById('menu-list').innerHTML = '';
+      renderMenus();
       document.getElementById('sel').innerHTML =
           '<b>' + fmtDate(current.date) + '（' + current.weekday + '）' + current.start + '〜' + current.end + '</b><br>'
         + '📍 ' + esc(current.venue) + '　／　残り' + current.remaining + '席';
@@ -243,6 +255,34 @@
       btn.disabled=false; btn.textContent='予約する';
       document.getElementById('mask').classList.add('show');
     }
+
+    // お食事のメニュー欄を人数分つくる（メニューがある会場だけ）
+    function renderMenus(){
+      var box = document.getElementById('menu-box'), list = document.getElementById('menu-list');
+      var items = (current && current.menu) || [];
+      if(!items.length){ box.style.display = 'none'; list.innerHTML = ''; return; }
+      box.style.display = '';
+      var n = parseInt(document.getElementById('f-people').value, 10) || 1;
+      var prev = [].map.call(list.querySelectorAll('select'), function(s){ return s.value; }); // 選んだものは残す
+      list.innerHTML = '';
+      for(var i=0;i<n;i++){
+        var s = document.createElement('select'); s.className = 'menu-sel';
+        var o0 = document.createElement('option'); o0.value = '';
+        o0.textContent = (n > 1 ? (i+1) + '人目：' : '') + 'メニューを選んでください';
+        s.appendChild(o0);
+        items.forEach(function(m){ var o = document.createElement('option'); o.value = m; o.textContent = m; s.appendChild(o); });
+        if(prev[i]) s.value = prev[i];
+        list.appendChild(s);
+      }
+    }
+
+    // 選んだメニューを「ナポリタン×2、カレー×1」の形にまとめる
+    function summarizeMenus(menus){
+      var order = [], count = {};
+      menus.forEach(function(m){ if(!count[m]){ count[m] = 0; order.push(m); } count[m]++; });
+      return order.map(function(m){ return m + '×' + count[m]; }).join('、');
+    }
+    var LAST_MENU = '';
 
     function doSubmit(){
       if(!current) return;
@@ -254,8 +294,13 @@
       if(!name){ err.textContent='お名前を入力してください。'; return; }
       if(people<1){ err.textContent='人数を選んでください。'; return; }
       if(email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ err.textContent='メールアドレスの形式をご確認ください。'; return; }
+      var menus = [].map.call(document.querySelectorAll('#menu-list select'), function(s){ return s.value; });
+      if(current.menu && current.menu.length){
+        if(menus.length !== people || menus.some(function(m){ return !m; })){ err.textContent='お食事のメニューを人数分お選びください。'; return; }
+      }
+      LAST_MENU = menus.length ? summarizeMenus(menus) : '';
       var btn=document.getElementById('submitBtn'); btn.disabled=true; btn.textContent='送信中…';
-      api({ action:'submit', id:current.id, name:name, people:people, contact:contact, email:email, uid:LINE_USER.id, lname:LINE_USER.name })
+      api({ action:'submit', id:current.id, name:name, people:people, contact:contact, email:email, uid:LINE_USER.id, lname:LINE_USER.name, menu:menus.join('|') })
         .then(function(res){ onSubmitDone(res); })
         .catch(function(){ btn.disabled=false; btn.textContent='予約する'; err.textContent='通信エラーが発生しました。もう一度お試しください。'; });
     }
@@ -268,7 +313,8 @@
         document.getElementById('done-num').textContent=res.reservationNo;
         var s=res.session||{};
         document.getElementById('done-detail').innerHTML =
-          fmtDate(s.date)+'（'+(s.weekday||'')+'）'+s.start+'〜'+s.end+'<br>📍 '+esc(s.venue);
+          fmtDate(s.date)+'（'+(s.weekday||'')+'）'+s.start+'〜'+s.end+'<br>📍 '+esc(s.venue)
+          + (LAST_MENU ? '<br>🍽 '+esc(LAST_MENU) : '');
         loadSessions();
       } else {
         btn.disabled=false; btn.textContent='予約する';
